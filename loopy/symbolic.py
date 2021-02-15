@@ -2610,7 +2610,7 @@ class AccessRangeOverlapChecker:
 
 # {{{ check for write races in accesses
 
-def _check_for_write_races(map_a, insn_a, map_b, insn_b, knl):
+def _check_for_access_races(map_a, insn_a, map_b, insn_b, knl):
     """
     Returns *True* if the execution instances of *insn_a* and *insn_b*, accessing
     the same variable via access maps *map_a* and *map_b*, result in an access race.
@@ -2618,8 +2618,7 @@ def _check_for_write_races(map_a, insn_a, map_b, insn_b, knl):
     .. note::
 
         The accesses map_a, map_b lead to write races iff there exists 2
-        *unequal* global ids that access the address.
-
+        *unequal* global ids that access the same address.
     """
     from loopy.kernel.data import (filter_iname_tags_by_type,
             HardwareConcurrentTag)
@@ -2799,7 +2798,7 @@ class WriteRaceChecker:
         if insn1_amap is True or insn2_amap is True:
             return True
 
-        return _check_for_write_races(insn1_amap, self.kernel.id_to_insn[insn1],
+        return _check_for_access_races(insn1_amap, self.kernel.id_to_insn[insn1],
                 insn2_amap, self.kernel.id_to_insn[insn2], self.kernel)
 
 # }}}
