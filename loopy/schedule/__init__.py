@@ -818,7 +818,7 @@ def _get_dep_equivalent_nests(tree, within1, within2):
     return iname1, iname2
 
 
-def no_recurse_schedule(kernel):
+def generate_loop_schedules_v2(kernel):
     from loopy.schedule.tools import get_loop_nest_tree
     from functools import reduce
     from pytools.graph import compute_topological_order
@@ -826,6 +826,10 @@ def no_recurse_schedule(kernel):
                                    ConcurrentTag)
 
     if any(insn.priority != 0 for insn in kernel.instructions):
+        raise NotImplementedError
+
+    if kernel.schedule is not None:
+        # handle preschedule ??
         raise NotImplementedError
 
     parallel_inames = {name
@@ -2045,6 +2049,38 @@ def generate_loop_schedules(kernel, callables_table, debug_args={}):
                 callables_table, debug_args=debug_args)
 
 
+def postprocess_schedule(kernel, gen_sched):
+    from loopy.kernel import KernelState
+    gen_sched = convert_barrier_instructions_to_barriers(
+            kernel, gen_sched)
+
+    gsize, lsize = kernel.get_grid_size_upper_bounds()
+
+    if (gsize or lsize):
+        if not kernel.options.disable_global_barriers:
+            logger.debug("%s: barrier insertion: global" % kernel.name)
+            gen_sched = insert_barriers(kernel, gen_sched,
+                    synchronization_kind="global", verify_only=True)
+
+        logger.debug("%s: barrier insertion: local" % kernel.name)
+        gen_sched = insert_barriers(kernel, gen_sched,
+            synchronization_kind="local", verify_only=False)
+        logger.debug("%s: barrier insertion: done" % kernel.name)
+
+    new_kernel = kernel.copy(
+            schedule=gen_sched,
+            state=KernelState.LINEARIZED)
+
+    from loopy.schedule.device_mapping import \
+            map_schedule_onto_host_or_device
+    if kernel.state != KernelState.LINEARIZED:
+        # Device mapper only gets run once.
+        new_kernel = map_schedule_onto_host_or_device(new_kernel)
+
+    from loopy.schedule.tools import add_extra_args_to_schedule
+    return add_extra_args_to_schedule(new_kernel)
+
+
 def generate_loop_schedules_inner(kernel, callables_table, debug_args={}):
     from loopy.kernel import KernelState
     if kernel.state not in (KernelState.PREPROCESSED, KernelState.LINEARIZED):
@@ -2053,6 +2089,14 @@ def generate_loop_schedules_inner(kernel, callables_table, debug_args={}):
 
     from loopy.check import pre_schedule_checks
     pre_schedule_checks(kernel, callables_table)
+
+    try:
+        gen_sched = generate_loop_schedules_v2(kernel)
+        yield postprocess_schedule(kernel, gen_sched)
+        return
+    except V2SchedulerNotImplementedException as e:
+        from warnings import warn
+        warn(f"Falling back to a slow scheduler implementation due to: {e}")
 
     schedule_count = 0
 
@@ -2163,35 +2207,8 @@ def generate_loop_schedules_inner(kernel, callables_table, debug_args={}):
                 sched_state, debug=debug, **schedule_gen_kwargs):
             debug.stop()
 
-            gen_sched = convert_barrier_instructions_to_barriers(
-                    kernel, gen_sched)
+            new_kernel = postprocess_schedule(kernel)
 
-            gsize, lsize = kernel.get_grid_size_upper_bounds(callables_table,
-                                                             return_dict=True)
-
-            if (gsize or lsize):
-                if not kernel.options.disable_global_barriers:
-                    logger.debug("%s: barrier insertion: global" % kernel.name)
-                    gen_sched = insert_barriers(kernel, gen_sched,
-                            synchronization_kind="global", verify_only=True)
-
-                logger.debug("%s: barrier insertion: local" % kernel.name)
-                gen_sched = insert_barriers(kernel, gen_sched,
-                    synchronization_kind="local", verify_only=False)
-                logger.debug("%s: barrier insertion: done" % kernel.name)
-
-            new_kernel = kernel.copy(
-                    linearization=gen_sched,
-                    state=KernelState.LINEARIZED)
-
-            from loopy.schedule.device_mapping import \
-                    map_schedule_onto_host_or_device
-            if kernel.state != KernelState.LINEARIZED:
-                # Device mapper only gets run once.
-                new_kernel = map_schedule_onto_host_or_device(new_kernel)
-
-            from loopy.schedule.tools import add_extra_args_to_schedule
-            new_kernel = add_extra_args_to_schedule(new_kernel)
             yield new_kernel
 
             debug.start()
