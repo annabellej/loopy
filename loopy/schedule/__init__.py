@@ -830,6 +830,14 @@ def generate_loop_schedules_v2(kernel):
     from pytools.graph import compute_topological_order
     from loopy.kernel.data import ConcurrentTag, IlpBaseTag, VectorizeTag
 
+    concurrent_inames = {iname for iname in kernel.all_inames()
+                         if kernel.iname_tags_of_type(iname, ConcurrentTag)}
+    ilp_inames = {iname for iname in kernel.all_inames()
+                  if kernel.iname_tags_of_type(iname, IlpBaseTag)}
+    vec_inames = {iname for iname in kernel.all_inames()
+                  if kernel.iname_tags_of_type(iname, VectorizeTag)}
+    parallel_inames = (concurrent_inames - ilp_inames - vec_inames)
+
     # {{{ can v2 scheduler handle??
 
     if any(len(insn.conflicts_with_groups) != 0 for insn in kernel.instructions):
@@ -845,15 +853,12 @@ def generate_loop_schedules_v2(kernel):
         raise V2SchedulerNotImplementedException("v2 scheduler cannot schedule"
                 " prescheduled kernels.")
 
-    # }}}
+    if ilp_inames or vec_inames:
+        raise V2SchedulerNotImplementedException("v2 scheduler cannot schedule"
+                " loops tagged with 'ilp'/'vec' as they are not guaranteed to"
+                " be single entry loops.")
 
-    concurrent_inames = {iname for iname in kernel.all_inames()
-                         if kernel.iname_tags_of_type(iname, ConcurrentTag)}
-    ilp_inames = {iname for iname in kernel.all_inames()
-                  if kernel.iname_tags_of_type(iname, IlpBaseTag)}
-    vec_inames = {iname for iname in kernel.all_inames()
-                  if kernel.iname_tags_of_type(iname, VectorizeTag)}
-    parallel_inames = (concurrent_inames - ilp_inames - vec_inames)
+    # }}}
 
     # the first step is to figure out the loop nest trees
     # I would rather get the loop nest tree first
