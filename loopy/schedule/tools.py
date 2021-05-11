@@ -197,6 +197,22 @@ def _order_loop_nests(loop_nest_tree,
             for outer_iname, inner_iname in zip(priority[:-1], priority[1:]):
                 inner_iname_nest = iname_to_tree_node_id[inner_iname]
                 outer_iname_nest = iname_to_tree_node_id[outer_iname]
+                if inner_iname_nest is _not_seen:
+                    cannot_satisfy_callback(f"Cannot enforce the constraint:"
+                                            f" {inner_iname} to be nested within"
+                                            f" {outer_iname}, as {inner_iname}"
+                                            f" is either a parallel loop or"
+                                            f" not an iname.")
+                    continue
+
+                if outer_iname_nest is _not_seen:
+                    cannot_satisfy_callback(f"Cannot enforce the constraint:"
+                                            f" {inner_iname} to be nested within"
+                                            f" {outer_iname}, as {outer_iname}"
+                                            f" is either a parallel loop or"
+                                            f" not an iname.")
+                    continue
+
                 if inner_iname_nest == outer_iname_nest:
                     flow_requirements[inner_iname_nest][outer_iname] |= {inner_iname}
                 else:
