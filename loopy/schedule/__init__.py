@@ -830,6 +830,12 @@ def generate_loop_schedules_v2(kernel):
     from pytools.graph import compute_topological_order
     from loopy.kernel.data import ConcurrentTag, IlpBaseTag, VectorizeTag
 
+    # {{{ can v2 scheduler handle??
+
+    if any(len(insn.conflicts_with_groups) != 0 for insn in kernel.instructions):
+        raise V2SchedulerNotImplementedException("v2 scheduler cannot schedule"
+                " kernels with instruction having conflicts with groups.")
+
     if any(insn.priority != 0 for insn in kernel.instructions):
         raise V2SchedulerNotImplementedException("v2 scheduler cannot schedule"
                 " kernels with instruction priorities set.")
@@ -838,6 +844,8 @@ def generate_loop_schedules_v2(kernel):
         # cannnot handle preschedule yet
         raise V2SchedulerNotImplementedException("v2 scheduler cannot schedule"
                 " prescheduled kernels.")
+
+    # }}}
 
     concurrent_inames = {iname for iname in kernel.all_inames()
                          if kernel.iname_tags_of_type(iname, ConcurrentTag)}
