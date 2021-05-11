@@ -23,6 +23,7 @@ THE SOFTWARE.
 
 from pytools import ImmutableRecord
 import sys
+import islpy as isl
 from loopy.diagnostic import warn_with_kernel, LoopyError  # noqa
 
 from pytools import MinRecursionLimit, ProcessLogger
@@ -194,11 +195,12 @@ def find_loop_nest_with_map(kernel):
     """
     result = {}
 
-    from loopy.kernel.data import ConcurrentTag
+    from loopy.kernel.data import ConcurrentTag, IlpBaseTag
 
     all_nonpar_inames = {
             iname for iname in kernel.all_inames()
-            if not kernel.iname_tags_of_type(iname, ConcurrentTag)}
+            if not kernel.iname_tags_of_type(iname,
+                    (ConcurrentTag, IlpBaseTag))}
 
     iname_to_insns = kernel.iname_to_insns()
 
@@ -214,24 +216,40 @@ def find_loop_nest_around_map(kernel):
     """Returns a dictionary mapping inames to other inames that are
     always nested around them.
     """
-    from collections import defaultdict
-    from loopy.schedule.tools import get_loop_nest_tree
+    result = {}
 
-    tree = get_loop_nest_tree(kernel)
+    all_inames = kernel.all_inames()
 
-    loop_nest_around_map = defaultdict(frozenset)
+    iname_to_insns = kernel.iname_to_insns()
 
-    for node in tree.all_nodes_itr():
-        if node.identifier == tree.root:
-            continue
-        iname = node.identifier
-        depth = tree.depth(iname)
-        all_ancestors = frozenset(tree.ancestor(iname, d).identifier
-                                  for d in range(1, depth))
+    # examine pairs of all inames--O(n**2), I know.
+    from loopy.kernel.data import IlpBaseTag
+    for inner_iname in all_inames:
+        result[inner_iname] = set()
+        for outer_iname in all_inames:
+            if inner_iname == outer_iname:
+                continue
 
-        loop_nest_around_map[iname] = all_ancestors
+            if kernel.iname_tags_of_type(outer_iname, IlpBaseTag):
+                # ILP tags are special because they are parallel tags
+                # and therefore 'in principle' nest around everything.
+                # But they're realized by the scheduler as a loop
+                # at the innermost level, so we'll cut them some
+                # slack here.
+                continue
 
-    return loop_nest_around_map
+            if iname_to_insns[inner_iname] < iname_to_insns[outer_iname]:
+                result[inner_iname].add(outer_iname)
+
+    for dom_idx, dom in enumerate(kernel.domains):
+        for outer_iname in dom.get_var_names(isl.dim_type.param):
+            if outer_iname not in all_inames:
+                continue
+
+            for inner_iname in dom.get_var_names(isl.dim_type.set):
+                result[inner_iname].add(outer_iname)
+
+    return result
 
 
 def find_loop_insn_dep_map(kernel, loop_nest_with_map, loop_nest_around_map):
@@ -802,6 +820,10 @@ def _get_dep_equivalent_nests(tree, within1, within2):
     return iname1, iname2
 
 
+class V2SchedulerNotImplementedException(RuntimeError):
+    pass
+
+
 def generate_loop_schedules_v2(kernel):
     from loopy.schedule.tools import get_loop_nest_tree
     from functools import reduce
@@ -809,10 +831,13 @@ def generate_loop_schedules_v2(kernel):
     from loopy.kernel.data import ConcurrentTag, IlpBaseTag, VectorizeTag
 
     if any(insn.priority != 0 for insn in kernel.instructions):
-        raise NotImplementedError
+        raise V2SchedulerNotImplementedException("v2 scheduler cannot schedule"
+                " kernels with instruction priorities set.")
 
     if kernel.schedule is not None:
-        raise NotImplementedError
+        # cannnot handle preschedule yet
+        raise V2SchedulerNotImplementedException("v2 scheduler cannot schedule"
+                " prescheduled kernels.")
 
     concurrent_inames = {iname for iname in kernel.all_inames()
                          if kernel.iname_tags_of_type(iname, ConcurrentTag)}
@@ -2195,8 +2220,7 @@ def generate_loop_schedules_inner(kernel, callables_table, debug_args={}):
                 sched_state, debug=debug, **schedule_gen_kwargs):
             debug.stop()
 
-            new_kernel = postprocess_schedule(kernel)
-
+            new_kernel = postprocess_schedule(kernel, gen_sched)
             yield new_kernel
 
             debug.start()

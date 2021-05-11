@@ -221,7 +221,10 @@ def _order_loop_nests(loop_nest_tree,
                         # inner iname and outer iname are indirect family members
                         # => must be realized via dependencies in the linearization
                         # phase
-                        raise NotImplementedError
+                        from loopy.schedule import V2SchedulerNotImplementedException
+                        raise V2SchedulerNotImplementedException("cannot"
+                                " schedule kernels with priority dependencies"
+                                " between sibling loop nests")
 
     def _raise_loopy_err(x):
         raise LoopyError(x)
