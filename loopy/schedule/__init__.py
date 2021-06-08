@@ -2075,12 +2075,12 @@ def generate_loop_schedules(kernel, callables_table, debug_args={}):
                 callables_table, debug_args=debug_args)
 
 
-def postprocess_schedule(kernel, gen_sched):
+def postprocess_schedule(kernel, callables_table, gen_sched):
     from loopy.kernel import KernelState
     gen_sched = convert_barrier_instructions_to_barriers(
             kernel, gen_sched)
 
-    gsize, lsize = kernel.get_grid_size_upper_bounds()
+    gsize, lsize = kernel.get_grid_size_upper_bounds(callables_table)
 
     if (gsize or lsize):
         if not kernel.options.disable_global_barriers:
@@ -2118,7 +2118,7 @@ def generate_loop_schedules_inner(kernel, callables_table, debug_args={}):
 
     try:
         gen_sched = generate_loop_schedules_v2(kernel)
-        yield postprocess_schedule(kernel, gen_sched)
+        yield postprocess_schedule(kernel, callables_table, gen_sched)
         return
     except V2SchedulerNotImplementedException as e:
         from warnings import warn
@@ -2233,7 +2233,7 @@ def generate_loop_schedules_inner(kernel, callables_table, debug_args={}):
                 sched_state, debug=debug, **schedule_gen_kwargs):
             debug.stop()
 
-            new_kernel = postprocess_schedule(kernel, gen_sched)
+            new_kernel = postprocess_schedule(kernel, callables_table, gen_sched)
             yield new_kernel
 
             debug.start()
