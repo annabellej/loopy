@@ -804,18 +804,21 @@ def schedule_as_many_run_insns_as_possible(sched_state, template_insn):
 
 # {{{ scheduling algorithm
 
-def _get_dep_equivalent_nests(tree, within1, within2):
+def _get_outermost_diverging_inames(tree, within1, within2):
+    """
+    For loop nestings *within1* and *within2*, returns the first inames at which
+    the loops nests diverge in the loop nesting tree *tree*.
+
+    :arg tree: A :class:`loopy.tools.Tree` of inames, denoting a loop nesting.
+    :arg within1: A :class:`frozenset` of inames.
+    :arg within2: A :class:`frozenset` of inames.
+    """
     common_ancestors = (within1 & within2) | {""}
 
     innermost_parent = max(common_ancestors,
                            key=lambda k: tree.depth(k))
-    iname1, = [iname
-               for iname in tree.children(innermost_parent)
-               if iname in within1]
-
-    iname2, = [iname
-               for iname in tree.children(innermost_parent)
-               if iname in within2]
+    iname1, = tree.children(innermost_parent) & within1
+    iname2, = tree.children(innermost_parent) & within2
 
     return iname1, iname2
 
@@ -860,8 +863,6 @@ def generate_loop_schedules_v2(kernel):
 
     # }}}
 
-    # the first step is to figure out the loop nest trees
-    # I would rather get the loop nest tree first
     loop_nest_tree = get_loop_nest_tree(kernel)
 
     # loop_inames: inames that are realized as loops. Concurrent inames aren't
@@ -871,7 +872,13 @@ def generate_loop_schedules_v2(kernel):
                           frozenset())
                    - parallel_inames)
 
+    # The idea here is to build a DAG, where nodes are schedule items and if
+    # there exists a node from schedule item A to schedule item B in the DAG =>
+    # B *must* come after *A* in the linearized result.
+
     dag = {}
+
+    # LeaveLoop(i) *must* follow EnterLoop(i)
     dag.update({EnterLoop(iname=iname): frozenset({LeaveLoop(iname=iname)})
                 for iname in loop_inames})
     dag.update({LeaveLoop(iname=iname): frozenset()
@@ -879,8 +886,9 @@ def generate_loop_schedules_v2(kernel):
     dag.update({RunInstruction(insn_id=insn.id): frozenset()
                 for insn in kernel.instructions})
 
-    for parent in loop_nest_tree.nodes():
-        outer_loop = parent
+    # {{{ add constraints imposed by the loop nesting
+
+    for outer_loop in loop_nest_tree.nodes():
         if outer_loop == "":
             continue
 
@@ -889,12 +897,20 @@ def generate_loop_schedules_v2(kernel):
             dag[EnterLoop(iname=outer_loop)] |= {EnterLoop(iname=inner_loop)}
             dag[LeaveLoop(iname=inner_loop)] |= {LeaveLoop(iname=outer_loop)}
 
+    # }}}
+
+    # {{{ add deps. b/w schedule items coming from insn. depepdencies
+
     for insn in kernel.instructions:
         insn_loop_inames = insn.within_inames & loop_inames
         for dep_id in insn.depends_on:
             dep = kernel.id_to_insn[dep_id]
             dep_loop_inames = dep.within_inames & loop_inames
+            # Enforce instruction dep:
             dag[RunInstruction(insn_id=dep_id)] |= {RunInstruction(insn_id=insn.id)}
+
+            # {{{ register deps on loop entry/leave because of insn. deps
+
             if dep_loop_inames < insn_loop_inames:
                 for iname in insn_loop_inames - dep_loop_inames:
                     dag[RunInstruction(insn_id=dep.id)] |= {EnterLoop(iname=iname)}
@@ -902,16 +918,24 @@ def generate_loop_schedules_v2(kernel):
                 for iname in dep_loop_inames - insn_loop_inames:
                     dag[LeaveLoop(iname=iname)] |= {RunInstruction(insn_id=insn.id)}
             elif dep_loop_inames != insn_loop_inames:
-                insn_iname, dep_iname = _get_dep_equivalent_nests(loop_nest_tree,
-                                                                  insn_loop_inames,
-                                                                  dep_loop_inames)
+                insn_iname, dep_iname = _get_outermost_diverging_inames(
+                        loop_nest_tree, insn_loop_inames, dep_loop_inames)
                 dag[LeaveLoop(iname=dep_iname)] |= {EnterLoop(iname=insn_iname)}
             else:
                 pass
 
+            # }}}
+
         for iname in insn_loop_inames:
+            # For an insn within a loop nest 'i'
+            # for i
+            #   insn
+            # end i
+            # 'insn' *must* come b/w 'for i' and 'end i'
             dag[EnterLoop(iname=iname)] |= {RunInstruction(insn_id=insn.id)}
             dag[RunInstruction(insn_id=insn.id)] |= {LeaveLoop(iname=iname)}
+
+    # }}}
 
     def iname_key(iname):
         all_ancestors = sorted(loop_nest_tree.ancestors(iname),
