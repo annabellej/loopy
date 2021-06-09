@@ -809,13 +809,13 @@ def _get_dep_equivalent_nests(tree, within1, within2):
 
     innermost_parent = max(common_ancestors,
                            key=lambda k: tree.depth(k))
-    iname1, = [iname.identifier
+    iname1, = [iname
                for iname in tree.children(innermost_parent)
-               if iname.identifier in within1]
+               if iname in within1]
 
-    iname2, = [iname.identifier
+    iname2, = [iname
                for iname in tree.children(innermost_parent)
-               if iname.identifier in within2]
+               if iname in within2]
 
     return iname1, iname2
 
@@ -879,13 +879,13 @@ def generate_loop_schedules_v2(kernel):
     dag.update({RunInstruction(insn_id=insn.id): frozenset()
                 for insn in kernel.instructions})
 
-    for parent in loop_nest_tree.all_nodes_itr():
-        outer_loop = parent.identifier
+    for parent in loop_nest_tree.nodes():
+        outer_loop = parent
         if outer_loop == "":
             continue
 
         for child in loop_nest_tree.children(outer_loop):
-            inner_loop = child.identifier
+            inner_loop = child
             dag[EnterLoop(iname=outer_loop)] |= {EnterLoop(iname=inner_loop)}
             dag[LeaveLoop(iname=inner_loop)] |= {LeaveLoop(iname=outer_loop)}
 
@@ -914,8 +914,8 @@ def generate_loop_schedules_v2(kernel):
             dag[RunInstruction(insn_id=insn.id)] |= {LeaveLoop(iname=iname)}
 
     def iname_key(iname):
-        all_ancestors = [loop_nest_tree.ancestor(iname, i).identifier
-                         for i in range(1, loop_nest_tree.depth(iname))]
+        all_ancestors = sorted(loop_nest_tree.ancestors(iname),
+                               key=lambda x: loop_nest_tree.depth(x))
         return ",".join(all_ancestors+[iname])
 
     def key(x):

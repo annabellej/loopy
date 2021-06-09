@@ -22,7 +22,7 @@ THE SOFTWARE.
 
 from loopy.kernel.data import AddressSpace
 from loopy.diagnostic import LoopyError
-from treelib import Tree
+from loopy.tools import Tree
 from collections import defaultdict
 from functools import reduce
 
@@ -114,14 +114,14 @@ class _not_seen:  # noqa: N801
     pass
 
 
-def pull_out_loop_nest(tree, loop_nests, inames_to_pull_out):
+def _pull_out_loop_nest(tree, loop_nests, inames_to_pull_out):
     """
-    Updates *tree* to make *inames_to_pull_out* a loop nesting level in
-    *loop_nests*
+    Returns a copy of *tree* to make *inames_to_pull_out* a loop nesting level
+    in *loop_nests*.
 
-    :returns: a :class:`tuple` ``(outer_loop_nest, inner_loop_nest)``, where
-        outer_loop_nest is the identifier for the new outer and inner loop
-        nests so that *inames_to_pull_out* is a valid nesting.
+    :returns: a :class:`tuple` ``(new_tree, outer_loop_nest, inner_loop_nest)``,
+        where outer_loop_nest is the identifier for the new outer and inner
+        loop nests so that *inames_to_pull_out* is a valid nesting.
     """
     assert all(isinstance(loop_nest, frozenset) for loop_nest in loop_nests)
     assert inames_to_pull_out <= reduce(frozenset.union, loop_nests, frozenset())
@@ -131,7 +131,7 @@ def pull_out_loop_nest(tree, loop_nests, inames_to_pull_out):
     loop_nests = sorted(loop_nests, key=lambda nest: tree.depth(nest))
 
     for outer, inner in zip(loop_nests[:-1], loop_nests[1:]):
-        if outer != tree.parent(inner).identifier:
+        if outer != tree.parent(inner):
             raise LoopyError(f"Cannot schedule loop nest {inames_to_pull_out} "
                              f" in the nesting tree:\n{tree}")
 
@@ -147,29 +147,28 @@ def pull_out_loop_nest(tree, loop_nests, inames_to_pull_out):
 
     if new_outer_loop_nest == innermost_loop_nest:
         # such a loop nesting already exists => do nothing
-        return new_outer_loop_nest, None
+        return tree, new_outer_loop_nest, None
 
     # add the outer loop to our loop nest tree
-    tree.create_node(identifier=new_outer_loop_nest,
-                     parent=tree.parent(innermost_loop_nest).identifier)
+    tree = tree.add_node(new_outer_loop_nest,
+                         parent=tree.parent(innermost_loop_nest))
 
     # rename the old loop to the inner loop
-    tree.update_node(innermost_loop_nest,
-                     identifier=new_inner_loop_nest,
-                     tag=new_inner_loop_nest)
+    tree = tree.rename_node(innermost_loop_nest,
+                            new_id=new_inner_loop_nest)
 
     # set the parent of inner loop to be the outer loop
-    tree.move_node(new_inner_loop_nest, new_outer_loop_nest)
+    tree = tree.move_node(new_inner_loop_nest, new_parent=new_outer_loop_nest)
 
-    return new_outer_loop_nest, new_inner_loop_nest
+    return tree, new_outer_loop_nest, new_inner_loop_nest
 
 
-def add_inner_loops(tree, outer_loop_nest, inner_loop_nest):
+def _add_inner_loops(tree, outer_loop_nest, inner_loop_nest):
     """
-    Update *tree* to nest *inner_loop_nest* inside *outer_loop_nest*.
+    Returns a copy of *tree* that nests *inner_loop_nest* inside *outer_loop_nest*.
     """
     # add the outer loop to our loop nest tree
-    tree.create_node(identifier=inner_loop_nest, parent=outer_loop_nest)
+    return tree.add_node(inner_loop_nest, parent=outer_loop_nest)
 
 
 def _order_loop_nests(loop_nest_tree,
@@ -216,16 +215,10 @@ def _order_loop_nests(loop_nest_tree,
                 if inner_iname_nest == outer_iname_nest:
                     flow_requirements[inner_iname_nest][outer_iname] |= {inner_iname}
                 else:
-                    ancestors_of_inner_iname = reduce(
-                        frozenset.union,
-                        (loop_nest_tree.ancestor(inner_iname_nest, k).identifier
-                        for k in range(loop_nest_tree.depth(inner_iname_nest))),
-                        frozenset())
-                    ancestors_of_outer_iname = reduce(
-                        frozenset.union,
-                        (loop_nest_tree.ancestor(outer_iname_nest, k).identifier
-                        for k in range(loop_nest_tree.depth(outer_iname_nest))),
-                        frozenset())
+                    ancestors_of_inner_iname = (loop_nest_tree
+                                                .ancestors(inner_iname_nest))
+                    ancestors_of_outer_iname = (loop_nest_tree
+                                                .ancestors(outer_iname_nest))
                     if outer_iname in ancestors_of_inner_iname:
                         # constraint already satisfied => do nothing
                         pass
@@ -259,32 +252,28 @@ def _order_loop_nests(loop_nest_tree,
     # Either all of these loop nestings would be valid or all would invalid =>
     # we aren't marking any schedulable kernel as unschedulable.
 
-    new_tree = Tree()
+    new_tree = Tree.from_root("")
 
     old_to_new_parent = {}
 
-    new_tree.create_node(identifier="")
     old_to_new_parent[loop_nest_tree.root] = ""
 
     # traversing 'tree' in an BFS fashion to create 'new_tree'
-    queue = [node.identifier
-             for node in loop_nest_tree.children(loop_nest_tree.root)]
+    queue = list(loop_nest_tree.children(loop_nest_tree.root))
 
     while queue:
         current_nest = queue.pop(0)
 
         ordered_nest = ordered_loop_nests[current_nest]
-        new_tree.create_node(identifier=ordered_nest[0],
-                             parent=old_to_new_parent[loop_nest_tree
-                                                      .parent(current_nest)
-                                                      .identifier])
+        new_tree = new_tree.add_node(ordered_nest[0],
+                                     parent=old_to_new_parent[loop_nest_tree
+                                                              .parent(current_nest)])
         for new_parent, new_child in zip(ordered_nest[:-1], ordered_nest[1:]):
-            new_tree.create_node(identifier=new_child, parent=new_parent)
+            new_tree = new_tree.add_node(node=new_child, parent=new_parent)
 
         old_to_new_parent[current_nest] = ordered_nest[-1]
 
-        queue.extend([child.identifier
-                      for child in loop_nest_tree.children(current_nest)])
+        queue.extend(list(loop_nest_tree.children(current_nest)))
 
     # }}}
 
@@ -324,13 +313,11 @@ def get_loop_nest_tree(kernel):
     iname_chains = {insn.within_inames - parallel_inames
                      for insn in kernel.instructions}
 
-    tree = Tree()
     root = frozenset()
+    tree = Tree.from_root(root)
 
     # mapping from iname to the innermost loop nest they are part of in *tree*.
     iname_to_tree_node_id = defaultdict(lambda: _not_seen)
-
-    tree.create_node(identifier=root)
 
     # if there were any loop with no inames, those have been already account
     # for as the root.
@@ -343,11 +330,12 @@ def get_loop_nest_tree(kernel):
 
         all_nests = {iname_to_tree_node_id[iname] for iname in seen_inames}
 
-        outer_loop, inner_loop = pull_out_loop_nest(tree,
-                                                    (all_nests | {frozenset()}),
-                                                    seen_inames)
+        tree, outer_loop, inner_loop = _pull_out_loop_nest(tree,
+                                                           (all_nests
+                                                            | {frozenset()}),
+                                                           seen_inames)
         if not_seen_inames:
-            add_inner_loops(tree, outer_loop, not_seen_inames)
+            tree = _add_inner_loops(tree, outer_loop, not_seen_inames)
 
         # {{{ update iname to node id
 
@@ -369,9 +357,11 @@ def get_loop_nest_tree(kernel):
         for ilp_iname in (ilp_inames & iname_chains):
             # pull out other loops so that ilp_iname is the innermost
             all_nests = {iname_to_tree_node_id[iname] for iname in seen_inames}
-            outer_loop, inner_loop = pull_out_loop_nest(tree,
-                                                        (all_nests | {frozenset()}),
-                                                        iname_chain - {ilp_iname})
+            tree, outer_loop, inner_loop = _pull_out_loop_nest(tree,
+                                                               (all_nests
+                                                                | {frozenset()}),
+                                                               (iname_chain
+                                                                - {ilp_iname}))
 
             for iname in outer_loop:
                 iname_to_tree_node_id[iname] = outer_loop
@@ -406,9 +396,7 @@ def get_loop_nest_tree(kernel):
                 if inner_iname_nest == outer_iname_nest:
                     strict_loop_priorities |= {(outer_iname, inner_iname)}
                 else:
-                    ancestors_of_inner_iname = {
-                        tree.ancestor(inner_iname_nest, k).identifier
-                        for k in range(tree.depth(inner_iname_nest))}
+                    ancestors_of_inner_iname = tree.ancestors(inner_iname_nest)
                     if outer_iname_nest not in ancestors_of_inner_iname:
                         raise LoopyError(f"Loop '{outer_iname}' cannot be nested"
                                          f" outside '{inner_iname}'.")
