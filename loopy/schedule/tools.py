@@ -23,7 +23,6 @@ THE SOFTWARE.
 from loopy.kernel.data import AddressSpace
 from loopy.diagnostic import LoopyError
 from loopy.tools import Tree
-from collections import defaultdict
 from functools import reduce
 
 
@@ -110,18 +109,44 @@ def add_extra_args_to_schedule(kernel):
 # }}}
 
 
-class _not_seen:  # noqa: N801
-    pass
-
-
 def _pull_out_loop_nest(tree, loop_nests, inames_to_pull_out):
     """
-    Returns a copy of *tree* to make *inames_to_pull_out* a loop nesting level
-    in *loop_nests*.
+    Returns a copy of *tree* that realizes *inames_to_pull_out* as loop
+    nesting.
+
+    :arg tree: A :class:`loopy.tools.Tree`, where each node is
+        :class:`frozenset` of inames representing a loop nest. For example a
+        tree might look like:
+
+    :arg loop_nests: A collection of nodes in *tree* that cover
+        *inames_to_pull_out*.
 
     :returns: a :class:`tuple` ``(new_tree, outer_loop_nest, inner_loop_nest)``,
         where outer_loop_nest is the identifier for the new outer and inner
         loop nests so that *inames_to_pull_out* is a valid nesting.
+
+    .. note::
+
+        We could compute *loop_nests* within this routine's implementation, but
+        computing would be expensive and hence we ask the caller for this info.
+
+    Example::
+       *tree*: frozenset()
+               └── frozenset({'j', 'i'})
+                   └── frozenset({'k', 'l'})
+
+       *inames_to_pull_out*: frozenset({'k', 'i', 'j'})
+       *loop_nests*: {frozenset({'j', 'i'}), frozenset({'k', 'l'})}
+
+       Returns:
+
+       *new_tree*: frozenset()
+                   └── frozenset({'j', 'i'})
+                       └── frozenset({'k'})
+                           └── frozenset({'l'})
+
+       *outer_loop_nest*: frozenset({'j', 'i'})
+       *inner_loop_nest*: frozenset({'l'})
     """
     assert all(isinstance(loop_nest, frozenset) for loop_nest in loop_nests)
     assert inames_to_pull_out <= reduce(frozenset.union, loop_nests, frozenset())
@@ -181,22 +206,45 @@ def _order_loop_nests(loop_nest_tree,
     multiple loop nesting, this routine returns a unique loop nest that is
     obtained after constraining *loop_nest_tree* with the constraints enforced
     by *priorities*.
+
+    :arg strict_priorities: Expresses strict nesting constraints similar to
+        :attr:`loopy.LoopKernel.loop_priorities`. These priorities are imposed
+        strictly i.e. if these conditions cannot be met a
+        :class:`loopy.diagnostic.LoopyError` is raised.
+
+    :arg relaxed_priorities: Expresses strict nesting constraints similar to
+        :attr:`loopy.LoopKernel.loop_priorities`. These nesting constraints are
+        treated as options.
+
+    :arg iname_to_tree_node_id: A mapping from iname to the loop nesting its a
+        part of.
     """
     from pytools.graph import compute_topological_order as toposort
     from warnings import warn
 
     loop_nests = set(iname_to_tree_node_id.values())
 
+    # flow_requirements: A mapping from the loop nest level to the nesting
+    # constraints applicable to it.
+    # Each nesting constraint is represented as a DAG. In the DAG, if there
+    # exists an edge from from iname 'i' -> iname 'j' => 'j' should be nested
+    # inside 'i'.
     flow_requirements = {loop_nest: {iname: frozenset()
                                      for iname in loop_nest}
                          for loop_nest in loop_nests}
 
+    # The plan here is populate DAGs in *flow_requirements* and then perform a
+    # toposort for each loop nest.
+
     def _update_flow_requirements(priorities, cannot_satisfy_callback):
+        """
+        Records *priorities* in *flow_requirements* and calls
+        *cannot_satisfy_callback* with an appropriate error message if the
+        priorities cannot be met.
+        """
         for priority in priorities:
             for outer_iname, inner_iname in zip(priority[:-1], priority[1:]):
-                inner_iname_nest = iname_to_tree_node_id[inner_iname]
-                outer_iname_nest = iname_to_tree_node_id[outer_iname]
-                if inner_iname_nest is _not_seen:
+                if inner_iname not in iname_to_tree_node_id:
                     cannot_satisfy_callback(f"Cannot enforce the constraint:"
                                             f" {inner_iname} to be nested within"
                                             f" {outer_iname}, as {inner_iname}"
@@ -204,13 +252,16 @@ def _order_loop_nests(loop_nest_tree,
                                             f" not an iname.")
                     continue
 
-                if outer_iname_nest is _not_seen:
+                if outer_iname not in iname_to_tree_node_id:
                     cannot_satisfy_callback(f"Cannot enforce the constraint:"
                                             f" {inner_iname} to be nested within"
                                             f" {outer_iname}, as {outer_iname}"
                                             f" is either a parallel loop or"
                                             f" not an iname.")
                     continue
+
+                inner_iname_nest = iname_to_tree_node_id[inner_iname]
+                outer_iname_nest = iname_to_tree_node_id[outer_iname]
 
                 if inner_iname_nest == outer_iname_nest:
                     flow_requirements[inner_iname_nest][outer_iname] |= {inner_iname}
@@ -220,7 +271,7 @@ def _order_loop_nests(loop_nest_tree,
                     ancestors_of_outer_iname = (loop_nest_tree
                                                 .ancestors(outer_iname_nest))
                     if outer_iname in ancestors_of_inner_iname:
-                        # constraint already satisfied => do nothing
+                        # nesting constraint already satisfied => do nothing
                         pass
                     elif inner_iname in ancestors_of_outer_iname:
                         cannot_satisfy_callback("Cannot satisfy constraint that"
@@ -229,7 +280,7 @@ def _order_loop_nests(loop_nest_tree,
                     else:
                         # inner iname and outer iname are indirect family members
                         # => must be realized via dependencies in the linearization
-                        # phase
+                        # phase, not implemented in v2-scheduler yet.
                         from loopy.schedule import V2SchedulerNotImplementedException
                         raise V2SchedulerNotImplementedException("cannot"
                                 " schedule kernels with priority dependencies"
@@ -238,19 +289,24 @@ def _order_loop_nests(loop_nest_tree,
     def _raise_loopy_err(x):
         raise LoopyError(x)
 
+    # record strict priorities
     _update_flow_requirements(strict_priorities, _raise_loopy_err)
+    # record relaxed priorities
     _update_flow_requirements(relaxed_priorities, warn)
 
+    # ordered_loop_nests: A mapping from the unordered loop nests to their
+    # ordered couterparts. For example. If we had only one loop nest
+    # `frozenset({"i", "j", "k"})`, and the prioirities said added the
+    # constraint that "i" must be nested within "k", then `ordered_loop_nests`
+    # would be: `{frozenset({"i", "j", "k"}): ["j", "k", "i"]}` i.e. the loop
+    # nests would now have an order.
     ordered_loop_nests = {unordered_nest: toposort(flow,
-                                         key=lambda x: x)
+                                                   key=lambda x: x)
                           for unordered_nest, flow in flow_requirements.items()}
 
-    # {{{ just choose one of the possible loop nestings
+    # {{{ combine 'loop_nest_tree' along with 'ordered_loop_nest_tree'
 
     assert loop_nest_tree.root == frozenset()
-
-    # Either all of these loop nestings would be valid or all would invalid =>
-    # we aren't marking any schedulable kernel as unschedulable.
 
     new_tree = Tree.from_root("")
 
@@ -317,7 +373,7 @@ def get_loop_nest_tree(kernel):
     tree = Tree.from_root(root)
 
     # mapping from iname to the innermost loop nest they are part of in *tree*.
-    iname_to_tree_node_id = defaultdict(lambda: _not_seen)
+    iname_to_tree_node_id = {}
 
     # if there were any loop with no inames, those have been already account
     # for as the root.
@@ -325,7 +381,7 @@ def get_loop_nest_tree(kernel):
 
     for iname_chain in iname_chains:
         not_seen_inames = frozenset(iname for iname in iname_chain
-                                    if iname_to_tree_node_id[iname] is _not_seen)
+                                    if iname not in iname_to_tree_node_id)
         seen_inames = iname_chain - not_seen_inames
 
         all_nests = {iname_to_tree_node_id[iname] for iname in seen_inames}
@@ -335,6 +391,10 @@ def get_loop_nest_tree(kernel):
                                                             | {frozenset()}),
                                                            seen_inames)
         if not_seen_inames:
+            # make '_not_seen_inames' nest inside the seen ones.
+            # example: if there is already a loop nesting "i,j,k"
+            # and the current iname chain is "i,j,l". Only way this is possible
+            # is if "l" is nested within "i,j"-loops.
             tree = _add_inner_loops(tree, outer_loop, not_seen_inames)
 
         # {{{ update iname to node id
