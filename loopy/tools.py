@@ -29,7 +29,7 @@ from loopy.symbolic import WalkMapper as LoopyWalkMapper
 from pymbolic.mapper.persistent_hash import (
         PersistentHashWalkMapper as PersistentHashWalkMapperBase)
 from sys import intern
-from typing import FrozenSet, Generic, TypeVar
+from typing import FrozenSet, Generic, TypeVar, Iterator
 from pyrsistent import PMap, pmap
 from dataclasses import dataclass
 
@@ -817,6 +817,9 @@ class Tree(Generic[T]):
             return [str(node)] + sum(children_result, start=[])
 
         return "\n".join(rec(self.root))
+
+    def nodes(self) -> "Iterator[T]":
+        return iter(self._child_to_parent.keys())
 
 # }}}
 
