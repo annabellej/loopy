@@ -676,6 +676,9 @@ class Tree(Generic[T]):
         """
         Returns a :class:`frozenset` of nodes that are ancestors of *node*.
         """
+        if not self.is_a_node(node):
+            raise ValueError(f"'{node}' not in tree.")
+
         if self.is_root(node):
             # => root
             return frozenset()
@@ -685,12 +688,21 @@ class Tree(Generic[T]):
         return frozenset([parent]) | self.ancestors(parent)
 
     def parent(self, node: T) -> "Optional[T]":
+        if not self.is_a_node(node):
+            raise ValueError(f"'{node}' not in tree.")
+
         return self._child_to_parent[node]
 
     def children(self, node: T) -> "FrozenSet[T]":
+        if not self.is_a_node(node):
+            raise ValueError(f"'{node}' not in tree.")
+
         return self._parent_to_children[node]
 
     def depth(self, node: T) -> int:
+        if not self.is_a_node(node):
+            raise ValueError(f"'{node}' not in tree.")
+
         if self.is_root(node):
             # => None
             return 0
@@ -698,9 +710,15 @@ class Tree(Generic[T]):
         return 1 + self.depth(self.parent(node))
 
     def is_root(self, node: T) -> bool:
+        if not self.is_a_node(node):
+            raise ValueError(f"'{node}' not in tree.")
+
         return self.parent(node) is None
 
     def is_leaf(self, node: T) -> bool:
+        if not self.is_a_node(node):
+            raise ValueError(f"'{node}' not in tree.")
+
         return len(self.children(node)) == 0
 
     def is_a_node(self, node: T) -> bool:
@@ -734,8 +752,8 @@ class Tree(Generic[T]):
 
         parent = self.parent(node)
 
-        new_child_to_parent = self._child_to_parent.discard(node).set(node,
-                                                                      parent)
+        new_child_to_parent = (self._child_to_parent.discard(node)
+                               .set(new_id, parent))
         new_parent_to_children = (self._parent_to_children
                                   .discard(node)
                                   .set(new_id, self.children(node)))
@@ -758,10 +776,10 @@ class Tree(Generic[T]):
         if self.is_root(node) and new_parent is not None:
             raise ValueError("Moving root not allowed.")
 
-        if not self.in_tree(node):
+        if not self.is_a_node(node):
             raise ValueError(f"'{node}' not a part of the tree => cannot move.")
 
-        if not self.in_tree(new_parent):
+        if not self.is_a_node(new_parent):
             raise ValueError(f"Cannot move to '{new_parent}' as it's not in tree.")
 
         parent = self.parent(node)
