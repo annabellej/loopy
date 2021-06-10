@@ -873,8 +873,8 @@ def generate_loop_schedules_v2(kernel):
                    - parallel_inames)
 
     # The idea here is to build a DAG, where nodes are schedule items and if
-    # there exists a node from schedule item A to schedule item B in the DAG =>
-    # B *must* come after *A* in the linearized result.
+    # there exists an edge from schedule item A to schedule item B in the DAG =>
+    # B *must* come after A in the linearized result.
 
     dag = {}
 
