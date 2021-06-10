@@ -439,7 +439,7 @@ def get_loop_nest_tree(kernel):
     loop_inames = (reduce(frozenset.union, iname_chains, frozenset())
                    - parallel_inames)
 
-    for dom_idx, dom in enumerate(kernel.domains):
+    for dom in kernel.domains:
         for outer_iname in set(dom.get_var_names(dim_type.param)):
             if outer_iname not in loop_inames:
                 continue
