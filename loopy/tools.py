@@ -751,9 +751,21 @@ class Tree(Generic[T]):
                              " of the tree.")
 
         parent = self.parent(node)
+        children = self.children(node)
+
+        # {{{ update child to parent
 
         new_child_to_parent = (self._child_to_parent.discard(node)
                                .set(new_id, parent))
+
+        for child in children:
+            new_child_to_parent = (new_child_to_parent
+                                   .set(child, new_id))
+
+        # }}}
+
+        # {{{ update parent_to_children
+
         new_parent_to_children = (self._parent_to_children
                                   .discard(node)
                                   .set(new_id, self.children(node)))
@@ -765,6 +777,8 @@ class Tree(Generic[T]):
                                       .set(parent, ((self.children(parent)
                                                     - frozenset([node]))
                                                     | frozenset([new_id]))))
+
+        # }}}
 
         return Tree(new_parent_to_children,
                     new_child_to_parent)
