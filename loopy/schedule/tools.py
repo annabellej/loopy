@@ -145,7 +145,7 @@ def _pull_out_loop_nest(tree, loop_nests, inames_to_pull_out):
                        └── frozenset({'k'})
                            └── frozenset({'l'})
 
-       *outer_loop_nest*: frozenset({'j', 'i'})
+       *outer_loop_nest*: frozenset({'k'})
        *inner_loop_nest*: frozenset({'l'})
     """
     assert all(isinstance(loop_nest, frozenset) for loop_nest in loop_nests)
