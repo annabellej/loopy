@@ -1143,7 +1143,7 @@ class SetTrie:
         if len(key) == 0:
             return
 
-        for child_key, child in self.children.items():
+        for child_key, child in self.children.items():  # noqa: B007
             common = child_key & key
             if common:
                 break
@@ -1539,7 +1539,7 @@ def stringify_instruction_list(kernel):
             elif not is_in_new and is_in_current:
                 removed.append(iname)
             else:
-                assert False
+                raise AssertionError()
 
         if removed:
             indent_level[0] -= indent_increment * len(removed)
@@ -1550,7 +1550,8 @@ def stringify_instruction_list(kernel):
 
         current_inames[0] = new_inames
 
-    for insn, (arrows, extender) in zip(printed_insn_order, arrows_and_extenders):
+    for insn, (arrows, extender) in zip(  # noqa: B007
+            printed_insn_order, arrows_and_extenders):
         if isinstance(insn, lp.MultiAssignmentBase):
             lhs = ", ".join(str(a) for a in insn.assignees)
             rhs = str(insn.expression)
@@ -2048,5 +2049,26 @@ def get_call_graph(t_unit, only_kernel_callables=False):
     return pmap(call_graph)
 
 # }}}
+
+
+# {{{ get_outer_params
+
+def get_outer_params(domains):
+    """
+    Returns names of dims that appear only as params in *domains*.
+
+    :arg domains: An instance of :class:`list` of :class:`isl.BasicSet`.
+    """
+    all_inames = set()
+    all_params = set()
+    for dom in domains:
+        all_inames.update(dom.get_var_names(dim_type.set))
+        all_params.update(dom.get_var_names(dim_type.param))
+
+    from loopy.tools import intern_frozenset_of_ids
+    return intern_frozenset_of_ids(all_params-all_inames)
+
+# }}}
+
 
 # vim: foldmethod=marker
