@@ -813,7 +813,7 @@ class Tree(Generic[T]):
         """
         Stringifies the tree by using the box-drawing unicode characters.
 
-        .. testsetup::
+        ::
 
             >>> from loopy.tools import Tree
             >>> tree = (Tree.from_root("Root")
@@ -822,8 +822,6 @@ class Tree(Generic[T]):
             ...         .add_node("D", "B")
             ...         .add_node("E", "B")
             ...         .add_node("C", "A"))
-
-        .. doctest::
 
             >>> print(tree)
             Root
