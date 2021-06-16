@@ -23,6 +23,8 @@ THE SOFTWARE.
 import sys
 import numpy as np
 import loopy as lp
+from pytools.tag import Tag
+
 import pyopencl as cl
 import pyopencl.clmath  # noqa
 import pyopencl.clrandom  # noqa
@@ -768,30 +770,92 @@ def test_tag_iname_with_match_pattern():
     assert str(i1_tag) == "unr"
 
 
+# {{{ custom iname tags
+
+class ElementLoopTag(Tag):
+    def __str__(self):
+        return "iel"
+
+
+class DOFLoopTag(Tag):
+    def __str__(self):
+        return "idof"
+
+
 def test_custom_iname_tag():
-    from pytools.tag import Tag
-
-    class ElementLoopTag(Tag):
-        def __str__(self):
-            return "iel"
-
-    class DOFLoopTag(Tag):
-        def __str__(self):
-            return "idof"
-
-    knl = lp.make_kernel(
+    t_unit = lp.make_kernel(
             "{[ifuzz0, ifuzz1]: 0<=ifuzz0<100 and 0<=ifuzz1<32}",
             """
             out_dofs[ifuzz0, ifuzz1] = 2*in_dofs[ifuzz0, ifuzz1]
             """)
-    knl = lp.tag_inames(knl, {"ifuzz0": ElementLoopTag(), "ifuzz1": DOFLoopTag()})
+    t_unit = lp.add_and_infer_dtypes(t_unit, {"in_dofs": np.float64})
+    t_unit = lp.tag_inames(t_unit,
+            {"ifuzz0": ElementLoopTag(), "ifuzz1": DOFLoopTag()})
 
-    knl = knl["loopy_kernel"]
+    knl = t_unit.default_entrypoint
     ifuzz0_tag, = knl.inames["ifuzz0"].tags
     ifuzz1_tag, = knl.inames["ifuzz1"].tags
 
     assert str(ifuzz0_tag) == "iel"
     assert str(ifuzz1_tag) == "idof"
+
+    lp.generate_code_v2(t_unit)
+
+    t_unit = lp.tag_inames(t_unit, {"ifuzz0": "g.0", "ifuzz1": "l.0"})
+    assert len(t_unit.default_entrypoint.inames["ifuzz0"].tags) == 2
+
+    lp.generate_code_v2(t_unit)
+
+# }}}
+
+
+def test_remove_instructions_with_recursive_deps():
+    t_unit = lp.make_kernel(
+            "{[i]: 0<=i<10}",
+            """
+            y[i] = 0 {id=insn0}
+            a[i] = 2*b[i] {id=insn1}
+            c[i] = 2*b[i] {id=insn2}
+            y[i] = y[i] + x[i] {id=insn3}
+            """, seq_dependencies=True, name="myknl")
+
+    knl = lp.remove_instructions(t_unit, {"insn1", "insn2"})["myknl"]
+
+    assert knl.id_to_insn["insn3"].depends_on == frozenset(["insn0"])
+    assert knl.id_to_insn["insn0"].depends_on == frozenset()
+
+
+def test_prefetch_with_within(ctx_factory):
+    t_unit = lp.make_kernel(
+            ["{[j]: 0<=j<256}",
+             "{[i, k]: 0<=i<100 and 0<=k<128}"],
+            """
+            f[j] = 3.14 * j {id=set_f}
+            f[j] = 2 * f[j] {id=update_f, nosync=set_f}
+            ... gbarrier {id=insn_gbar}
+            y[i, k] = f[k] * x[i, k] {id=set_y}
+            """, [lp.GlobalArg("x", shape=lp.auto, dtype=float), ...],
+            seq_dependencies=True,
+            name="myknl")
+
+    ref_t_unit = t_unit
+
+    t_unit = lp.split_iname(t_unit, "j", 32, inner_tag="l.0", outer_tag="g.0")
+    t_unit = lp.split_iname(t_unit, "i", 32, inner_tag="l.0", outer_tag="g.0")
+
+    t_unit = lp.add_prefetch(t_unit, "f", prefetch_insn_id="f_prftch",
+                             within="id:set_y", sweep_inames="k",
+                             dim_arg_names="iprftch", default_tag=None,
+                             temporary_address_space=lp.AddressSpace.LOCAL,
+                             temporary_name="foo",
+                             fetch_outer_inames=frozenset({"i_outer"}))
+    t_unit = lp.add_dependency(t_unit, "id:f_prftch", "id:insn_gbar")
+    t_unit = lp.split_iname(t_unit, "iprftch", 32, inner_tag="l.0")
+
+    # test that 'f' is only prefetched in set_y
+    assert t_unit["myknl"].temporary_variables["foo"].shape == (128,)
+
+    lp.auto_test_vs_ref(ref_t_unit, ctx_factory(), t_unit)
 
 
 if __name__ == "__main__":
