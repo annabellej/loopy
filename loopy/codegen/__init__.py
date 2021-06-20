@@ -36,7 +36,7 @@ from loopy.version import DATA_MODEL_VERSION
 from loopy.symbolic import CombineMapper
 from functools import reduce
 
-from loopy.kernel.function_interface import CallableKernel, ScalarCallable
+from loopy.kernel.function_interface import CallableKernel
 
 from pytools import ProcessLogger
 
@@ -708,10 +708,9 @@ def generate_code_v2(program):
     # {{{ cache retrieval
 
     from loopy import CACHING_ENABLED
-    from loopy.preprocess import prepare_for_caching
 
     if CACHING_ENABLED:
-        input_program = prepare_for_caching(program)
+        input_program = program
         try:
             result = code_gen_cache[input_program]
             logger.debug(f"TranslationUnit with entrypoints {program.entrypoints}:"
@@ -737,22 +736,8 @@ def generate_code_v2(program):
     from loopy.type_inference import infer_unknown_types
     program = infer_unknown_types(program, expect_completion=True)
 
-    new_callables = {}
-
-    for name, clbl in program.callables_table.items():
-        if isinstance(clbl, CallableKernel):
-            from loopy.schedule import get_one_linearized_kernel
-            knl = clbl.subkernel
-            if knl.linearization is None:
-                knl = get_one_linearized_kernel(
-                            knl, program.callables_table)
-            new_callables[name] = clbl.copy(subkernel=knl)
-        elif isinstance(clbl, ScalarCallable):
-            new_callables[name] = clbl
-        else:
-            raise NotImplementedError(type(clbl))
-
-    program = program.copy(callables_table=new_callables)
+    from loopy.schedule import linearize
+    program = linearize(program)
 
     # Why diverge? Generated code for a non-entrypoint kernel and an entrypoint
     # kernel isn't same for a general loopy target. For example in OpenCL, a
