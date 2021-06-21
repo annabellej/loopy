@@ -2143,9 +2143,6 @@ def generate_loop_schedules_inner(kernel, callables_table, debug_args=None):
         raise LoopyError("cannot schedule a kernel that has not been "
                 "preprocessed")
 
-    from loopy.check import pre_schedule_checks
-    pre_schedule_checks(kernel, callables_table)
-
     try:
         gen_sched = generate_loop_schedules_v2(kernel)
         yield postprocess_schedule(kernel, callables_table, gen_sched)
@@ -2345,6 +2342,31 @@ def get_one_linearized_kernel(kernel, callables_table):
         schedule_cache.store_if_not_present(sched_cache_key, result)
 
     return result
+
+
+def linearize(t_unit):
+    from loopy.kernel.function_interface import (CallableKernel,
+                                                 ScalarCallable)
+    from loopy.check import pre_schedule_checks
+
+    pre_schedule_checks(t_unit)
+
+    new_callables = {}
+
+    for name, clbl in t_unit.callables_table.items():
+        if isinstance(clbl, CallableKernel):
+            from loopy.schedule import get_one_linearized_kernel
+            knl = clbl.subkernel
+            if knl.linearization is None:
+                knl = get_one_linearized_kernel(knl,
+                                                t_unit.callables_table)
+            new_callables[name] = clbl.copy(subkernel=knl)
+        elif isinstance(clbl, ScalarCallable):
+            new_callables[name] = clbl
+        else:
+            raise NotImplementedError(type(clbl))
+
+    return t_unit.copy(callables_table=new_callables)
 
 
 # vim: foldmethod=marker
