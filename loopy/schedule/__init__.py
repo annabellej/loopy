@@ -865,7 +865,7 @@ def generate_loop_schedules_v2(kernel):
         raise V2SchedulerNotImplementedException("v2 scheduler cannot schedule"
                 " kernels with instruction priorities set.")
 
-    if kernel.schedule is not None:
+    if kernel.linearization is not None:
         # cannnot handle preschedule yet
         raise V2SchedulerNotImplementedException("v2 scheduler cannot schedule"
                 " prescheduled kernels.")
@@ -2135,7 +2135,7 @@ def postprocess_schedule(kernel, callables_table, gen_sched):
         logger.debug("%s: barrier insertion: done" % kernel.name)
 
     new_kernel = kernel.copy(
-            schedule=gen_sched,
+            linearization=gen_sched,
             state=KernelState.LINEARIZED)
 
     from loopy.schedule.device_mapping import \
